@@ -216,9 +216,9 @@ ifeq ($(COMP),mingw)
 	endif
 
 	CXXFLAGS += -Wextra -Wshadow
-	LDFLAGS += -static
+	#LDFLAGS += -static
 endif
-LDFLAGS += -static
+#LDFLAGS += -static
 
 ifeq ($(COMP),icc)
 	comp=icc
