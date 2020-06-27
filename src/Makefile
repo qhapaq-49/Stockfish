@@ -69,7 +69,7 @@ endif
 ### Section 2. High-level Configuration
 ### ==========================================================================
 #
-# flag                --- Comp switch --- Description
+# flag                --- Comp switch      --- Description
 # ----------------------------------------------------------------------------
 #
 # debug = yes/no      --- -DNDEBUG         --- Enable/Disable debug mode
@@ -92,82 +92,96 @@ endif
 optimize = yes
 debug = no
 sanitize = no
-bits = 32
+bits = 64
 prefetch = no
 popcnt = no
 sse = no
+avx2 = no
 pext = no
 
 ### 2.2 Architecture specific
-
 ifeq ($(ARCH),general-32)
 	arch = any
+	bits = 32
 endif
 
 ifeq ($(ARCH),x86-32-old)
 	arch = i386
+	bits = 32
 endif
 
 ifeq ($(ARCH),x86-32)
 	arch = i386
+	bits = 32
 	prefetch = yes
 	sse = yes
 endif
 
 ifeq ($(ARCH),general-64)
 	arch = any
-	bits = 64
 endif
 
 ifeq ($(ARCH),x86-64)
 	arch = x86_64
-	bits = 64
 	prefetch = yes
 	sse = yes
 endif
 
 ifeq ($(ARCH),x86-64-modern)
 	arch = x86_64
-	bits = 64
 	prefetch = yes
 	popcnt = yes
 	sse = yes
 endif
 
-ifeq ($(ARCH),x86-64-bmi2)
+ifeq ($(ARCH),x86-64-avx2)
 	arch = x86_64
 	bits = 64
 	prefetch = yes
 	popcnt = yes
 	sse = yes
+	avx2 = yes
+endif
+
+ifeq ($(ARCH),x86-64-bmi2)
+	arch = x86_64
+	prefetch = yes
+	popcnt = yes
+	sse = yes
+	avx2 = yes
 	pext = yes
 endif
 
 ifeq ($(ARCH),armv7)
 	arch = armv7
 	prefetch = yes
+	bits = 32
+endif
+
+ifeq ($(ARCH),armv8)
+	arch = armv8-a
+	bits = 64
+	prefetch = yes
 endif
 
 ifeq ($(ARCH),ppc-32)
 	arch = ppc
+	bits = 32
 endif
 
 ifeq ($(ARCH),ppc-64)
 	arch = ppc64
-	bits = 64
 	popcnt = yes
 	prefetch = yes
 endif
 
-
 ### ==========================================================================
-### Section 3. Low-level configuration
+### Section 3. Low-level Configuration
 ### ==========================================================================
 
 ### 3.1 Selecting compiler (default = gcc)
-
-CXXFLAGS += -Wall -Wcast-qual -fno-exceptions -std=c++14 $(EXTRACXXFLAGS)
-DEPENDFLAGS += -std=c++14
+CXXFLAGS += -Wall -Wcast-qual -fno-exceptions -std=c++17 $(EXTRACXXFLAGS)
+DEPENDFLAGS += -std=c++17
 LDFLAGS += $(EXTRALDFLAGS)
 
 ifeq ($(COMP),)
@@ -179,7 +193,7 @@ ifeq ($(COMP),gcc)
 	CXX=g++
 	CXXFLAGS += -pedantic -Wextra -Wshadow
 
-	ifeq ($(ARCH),armv7)
+	ifeq ($(ARCH),$(filter $(ARCH),armv7 armv8))
 		ifeq ($(OS),Android)
 			CXXFLAGS += -m$(bits)
 			LDFLAGS += -m$(bits)
@@ -218,7 +232,6 @@ ifeq ($(COMP),mingw)
 	CXXFLAGS += -Wextra -Wshadow
 	LDFLAGS += -static
 endif
-LDFLAGS += -static
 
 ifeq ($(COMP),icc)
 	comp=icc
@@ -237,6 +250,22 @@ ifeq ($(COMP),clang)
 	endif
 	endif
 
+	ifeq ($(ARCH),$(filter $(ARCH),armv7 armv8))
+		ifeq ($(OS),Android)
+			CXXFLAGS += -m$(bits)
+			LDFLAGS += -m$(bits)
+		endif
+	else
+		CXXFLAGS += -m$(bits)
+		LDFLAGS += -m$(bits)
+	endif
+endif
+
+ifeq ($(COMP),msys2)
+	comp=gcc
+	CXX=g++
+	CXXFLAGS += -pedantic -Wextra -Wshadow
+
 	ifeq ($(ARCH),armv7)
 		ifeq ($(OS),Android)
 			CXXFLAGS += -m$(bits)
@@ -246,6 +275,12 @@ ifeq ($(COMP),clang)
 		CXXFLAGS += -m$(bits)
 		LDFLAGS += -m$(bits)
 	endif
+
+	ifneq ($(KERNEL),Darwin)
+	   LDFLAGS += -Wl,--no-as-needed
+	endif
+
+	LDFLAGS += -static -Wl,-s
 endif
 
 ifeq ($(comp),icc)
@@ -336,37 +371,37 @@ endif
 ### 3.6 popcnt
 ifeq ($(popcnt),yes)
 	ifeq ($(arch),ppc64)
-		CXXFLAGS += -DUSE_POPCNT
+		CXXFLAGS += -DUSE_POPCNT -DUSE_SSE2
 	else ifeq ($(comp),icc)
-		CXXFLAGS += -msse3 -DUSE_POPCNT
+		CXXFLAGS += -msse3 -DUSE_POPCNT -DUSE_SSE2
 	else
-		CXXFLAGS += -msse3 -mpopcnt -DUSE_POPCNT
+		CXXFLAGS += -msse3 -mpopcnt -DUSE_POPCNT -DUSE_SSE2
+	endif
+endif
+
+ifeq ($(avx2),yes)
+	CXXFLAGS += -DUSE_AVX2
+	ifeq ($(comp),$(filter $(comp),gcc clang mingw msys2))
+		CXXFLAGS += -mavx2
 	endif
 endif
 
 ### 3.7 pext
 ifeq ($(pext),yes)
 	CXXFLAGS += -DUSE_PEXT
-	ifeq ($(comp),$(filter $(comp),gcc clang mingw))
-		CXXFLAGS += -mbmi2 -mavx2
+	ifeq ($(comp),$(filter $(comp),gcc clang mingw msys2))
+		CXXFLAGS += -mbmi2
 	endif
 endif
 
-### 3.8 Link Time Optimization, it works since gcc 4.5 but not on mingw under Windows.
+### 3.8 Link Time Optimization
 ### This is a mix of compile and link time options because the lto link phase
 ### needs access to the optimization flags.
 ifeq ($(optimize),yes)
 ifeq ($(debug), no)
-	ifeq ($(comp),$(filter $(comp),gcc clang))
+	ifeq ($(comp),$(filter $(comp),gcc clang mingw))
 		CXXFLAGS += -flto
 		LDFLAGS += $(CXXFLAGS)
-	endif
-
-	ifeq ($(comp),mingw)
-	ifeq ($(KERNEL),Linux)
-		CXXFLAGS += -flto
-		LDFLAGS += $(CXXFLAGS)
-	endif
 	endif
 endif
 endif
@@ -378,9 +413,8 @@ ifeq ($(OS), Android)
 	LDFLAGS += -fPIE -pie
 endif
 
-
 ### ==========================================================================
-### Section 4. Public targets
+### Section 4. Public Targets
 ### ==========================================================================
 
 help:
@@ -400,6 +434,7 @@ help:
 	@echo "Supported archs:"
 	@echo ""
 	@echo "x86-64-bmi2             > x86 64-bit with pext support (also enables SSE4)"
+	@echo "x86-64-avx2             > x86 64-bit with avx2 support (also enables SSE4)"
 	@echo "x86-64-modern           > x86 64-bit with popcnt support (also enables SSE3)"
 	@echo "x86-64                  > x86 64-bit generic"
 	@echo "x86-32                  > x86 32-bit (also enables SSE)"
@@ -407,6 +442,7 @@ help:
 	@echo "ppc-64                  > PPC 64-bit"
 	@echo "ppc-32                  > PPC 32-bit"
 	@echo "armv7                   > ARMv7 32-bit"
+	@echo "armv8                   > ARMv8 64-bit"
 	@echo "general-64              > unspecified 64-bit"
 	@echo "general-32              > unspecified 32-bit"
 	@echo ""
@@ -416,6 +452,7 @@ help:
 	@echo "mingw                   > Gnu compiler with MinGW under Windows"
 	@echo "clang                   > LLVM Clang compiler"
 	@echo "icc                     > Intel compiler"
+	@echo "msys2                   > MSYS2"
 	@echo ""
 	@echo "Simple examples. If you don't know what to do, you likely want to run: "
 	@echo ""
@@ -477,7 +514,7 @@ default:
 	help
 
 ### ==========================================================================
-### Section 5. Private targets
+### Section 5. Private Targets
 ### ==========================================================================
 
 all: $(EXE) .depend
@@ -495,6 +532,7 @@ config-sanity:
 	@echo "prefetch: '$(prefetch)'"
 	@echo "popcnt: '$(popcnt)'"
 	@echo "sse: '$(sse)'"
+	@echo "avx2: '$(avx2)'"
 	@echo "pext: '$(pext)'"
 	@echo ""
 	@echo "Flags:"
@@ -508,7 +546,8 @@ config-sanity:
 	@test "$(sanitize)" = "undefined" || test "$(sanitize)" = "thread" || test "$(sanitize)" = "address" || test "$(sanitize)" = "no"
 	@test "$(optimize)" = "yes" || test "$(optimize)" = "no"
 	@test "$(arch)" = "any" || test "$(arch)" = "x86_64" || test "$(arch)" = "i386" || \
-	 test "$(arch)" = "ppc64" || test "$(arch)" = "ppc" || test "$(arch)" = "armv7"
+	 test "$(arch)" = "ppc64" || test "$(arch)" = "ppc" || \
+	 test "$(arch)" = "armv7" || test "$(arch)" = "armv8-a"
 	@test "$(bits)" = "32" || test "$(bits)" = "64"
 	@test "$(prefetch)" = "yes" || test "$(prefetch)" = "no"
 	@test "$(popcnt)" = "yes" || test "$(popcnt)" = "no"
@@ -556,19 +595,18 @@ icc-profile-use:
 	all
 
 nnue: config-sanity
-	$(MAKE) CXXFLAGS='$(CXXFLAGS) -DEVAL_NNUE -DUSE_EVAL_HASH -DUSE_AVX2 -DUSE_SSE2 -DENABLE_TEST_CMD -fopenmp' LDFLAGS='$(LDFLAGS) -fopenmp' build
+	$(MAKE) CXXFLAGS='$(CXXFLAGS) -DEVAL_NNUE -DUSE_EVAL_HASH -DENABLE_TEST_CMD -fopenmp' LDFLAGS='$(LDFLAGS) -fopenmp' build
 
 nnue-gen-sfen-from-original-eval: config-sanity
-	$(MAKE) CXXFLAGS='$(CXXFLAGS) -DEVAL_LEARN -DUSE_EVAL_HASH -DUSE_AVX2 -DUSE_SSE2 -DENABLE_TEST_CMD -fopenmp' LDFLAGS='$(LDFLAGS) -fopenmp' build
+	$(MAKE) CXXFLAGS='$(CXXFLAGS) -DEVAL_LEARN -DUSE_EVAL_HASH -DENABLE_TEST_CMD -fopenmp' LDFLAGS='$(LDFLAGS) -fopenmp' build
 
 nnue-learn: config-sanity
-	$(MAKE) CXXFLAGS='$(CXXFLAGS) -DEVAL_LEARN -DEVAL_NNUE -DUSE_EVAL_HASH -DUSE_AVX2 -DUSE_SSE2 -DENABLE_TEST_CMD -fopenmp' LDFLAGS='$(LDFLAGS) -fopenmp' build
+	$(MAKE) CXXFLAGS='$(CXXFLAGS) -DEVAL_LEARN -DEVAL_NNUE -DUSE_EVAL_HASH -DENABLE_TEST_CMD -fopenmp' LDFLAGS='$(LDFLAGS) -fopenmp' build
 
 nnue-learn-use-blas: config-sanity
-	$(MAKE) CXXFLAGS='$(CXXFLAGS) -DEVAL_LEARN -DEVAL_NNUE -DUSE_EVAL_HASH -DUSE_AVX2 -DUSE_SSE2 -DENABLE_TEST_CMD -DUSE_BLAS -I/mingw64/include/OpenBLAS -fopenmp' LDFLAGS='$(LDFLAGS) -lopenblas -fopenmp' build
+	$(MAKE) CXXFLAGS='$(CXXFLAGS) -DEVAL_LEARN -DEVAL_NNUE -DUSE_EVAL_HASH -DENABLE_TEST_CMD -DUSE_BLAS -I/mingw64/include/OpenBLAS -fopenmp' LDFLAGS='$(LDFLAGS) -lopenblas -fopenmp' build
 
 .depend:
 	-@$(CXX) $(DEPENDFLAGS) -MM $(OBJS:.o=.cpp) > $@ 2> /dev/null
 
 -include .depend
-
